@@ -22,7 +22,7 @@ from typing import Final
 from groundhog.clock import Clock, Timer
 from groundhog.network import Network
 from groundhog.sim.disk import SimStorage
-from groundhog.sim.faults import PROFILES, FaultInjector, FaultProfile, generate_schedule
+from groundhog.sim.faults import FaultInjector, FaultProfile, generate_schedule
 from groundhog.sim.net import NodeState, SimNetwork
 from groundhog.sim.rng import Rng
 from groundhog.sim.trace import Trace
@@ -264,10 +264,3 @@ def run_demo(
         max_ticks=max_ticks,
     )
     return cluster, cluster.run()
-
-
-def profile_by_name(name: str) -> FaultProfile:
-    try:
-        return PROFILES[name]
-    except KeyError:
-        raise ValueError(f"unknown fault profile: {name!r}") from None

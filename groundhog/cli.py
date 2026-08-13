@@ -8,9 +8,11 @@ import argparse
 from collections.abc import Callable, Sequence
 
 from groundhog import __version__
-from groundhog.sim.demo import DEFAULT_NODES, profile_by_name, run_demo
-from groundhog.sim.faults import PROFILES
-from groundhog.sim.trace import open_trace
+from groundhog.naive.replicator import IMPLEMENTED as REPLICATOR_IMPLEMENTED
+from groundhog.naive.world import DEFAULT_KEYS, DEFAULT_WRITES, run_naive
+from groundhog.sim.demo import DEFAULT_NODES, run_demo
+from groundhog.sim.faults import PROFILES, profile_by_name
+from groundhog.sim.trace import NullTrace, open_trace
 from groundhog.types import MILLISECOND
 
 PROG = "groundhog"
@@ -58,6 +60,37 @@ def build_parser() -> argparse.ArgumentParser:
     )
     demo.set_defaults(handler=_cmd_demo)
 
+    naive = subcommands.add_parser(
+        "naive",
+        help="run the rung-3 replicator and check whether the copies agree",
+        description=(
+            "One primary, two backups, fire-and-forget replication. This is supposed "
+            "to break; the exercise is finding out how little it takes."
+        ),
+    )
+    naive.add_argument("--seed", type=int, default=DEFAULT_SEED, help="the universe to run")
+    naive.add_argument(
+        "--scan",
+        metavar="FROM:TO",
+        default=None,
+        help="run a range of seeds and print the ones that break (e.g. 0:2000)",
+    )
+    naive.add_argument(
+        "--faults",
+        choices=sorted(PROFILES),
+        default="quiet",
+        help="how badly the world behaves (default: quiet)",
+    )
+    naive.add_argument("--writes", type=int, default=DEFAULT_WRITES, help="client writes to issue")
+    naive.add_argument("--keys", type=int, default=DEFAULT_KEYS, help="size of the key space")
+    naive.add_argument(
+        "--trace",
+        metavar="PATH",
+        default=None,
+        help="write a JSONL trace here; '-' for stdout",
+    )
+    naive.set_defaults(handler=_cmd_naive)
+
     return parser
 
 
@@ -88,6 +121,64 @@ def _cmd_demo(args: argparse.Namespace) -> int:
             f"  node {node_id}   pongs {node.pongs}  durable {len(node.storage.durable_records())}"
         )
     return 0
+
+
+def _cmd_naive(args: argparse.Namespace) -> int:
+    if not REPLICATOR_IMPLEMENTED:
+        print(
+            "naive/replicator.py is not written yet.\n"
+            "That file is yours (M4 [Y]). Read its module docstring, fill in the four\n"
+            "methods, then set IMPLEMENTED = True."
+        )
+        return 2
+
+    profile = profile_by_name(args.faults)
+    if args.scan is not None:
+        return _scan_seeds(args, profile.name)
+
+    with open_trace(args.trace) as trace:
+        result = run_naive(
+            args.seed,
+            trace=trace,
+            profile=profile,
+            writes=args.writes,
+            keys=args.keys,
+        )
+
+    print(result.summary())
+    if not result.quiescent:
+        print("  WARNING: the run did not settle; this verdict is not trustworthy")
+    for node_id in sorted(result.stores):
+        print(f"  node {node_id}  {result.stores[node_id]}")
+    for divergence in result.divergences:
+        print(f"  DIVERGED  {divergence.describe()}")
+    for lost in result.lost:
+        print(f"  LOST      {lost.describe()}")
+    return 0 if result.agrees and result.kept_its_promises else 1
+
+
+def _scan_seeds(args: argparse.Namespace, profile_name: str) -> int:
+    """A sequential seed scan, so rung 3 is doable before M7 builds the real sweep."""
+    start, _, stop = args.scan.partition(":")
+    profile = profile_by_name(args.faults)
+    broken = 0
+    checked = 0
+
+    for seed in range(int(start), int(stop)):
+        result = run_naive(
+            seed,
+            trace=NullTrace(),
+            profile=profile,
+            writes=args.writes,
+            keys=args.keys,
+        )
+        checked += 1
+        if not (result.agrees and result.kept_its_promises):
+            broken += 1
+            print(result.summary())
+
+    print(f"\n{broken} of {checked} seeds broke under '{profile_name}'")
+    return 1 if broken else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

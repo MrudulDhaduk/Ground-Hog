@@ -157,12 +157,14 @@ trace, and re-running seed N reproduces the identical fault sequence.
 > "Until you have personally caused three copies of data to diverge, Raft is just
 > vocabulary."
 
-- [ ] `[C]` `kv.py` — the state machine: `put/get/delete` applied from a committed log
+- [x] `[C]` `kv.py` — the state machine: `put/get/delete` applied from a committed log
 - [ ] `[Y]` `naive/replicator.py` — **you write this.** One primary, two backups,
       fire-and-forget replication, ack the client immediately. No terms, no elections,
-      no quorum.
-- [ ] `[C]` `invariants/divergence.py` — a checker that just compares the three KV maps
+      no quorum. *(stub + contract + failing tests are in place; set `IMPLEMENTED = True`
+      when done)*
+- [x] `[C]` `invariants/divergence.py` — a checker that just compares the three KV maps
 - [ ] `[Y]` Point the simulator at it and find seeds where the three copies disagree
+      — `groundhog naive --scan 0:2000 --faults quiet`
 - [ ] `[Y]` **Write down, in `notes/rung3.md`, the three concrete ways you broke it**
       and which Raft rule fixes each one
 
@@ -294,7 +296,7 @@ etcd, `asyncio` anywhere, Docker, any cloud. Spec §4. If a plan calls for these
 | M1 Deterministic core | **done** |
 | M2 Storage + recovery | **done** |
 | M3 Fake network | **done** |
-| M4 Break replication | not started |
+| M4 Break replication | `[C]` done — **`[Y]` is yours** |
 | M5 Raft | not started |
 | M6 Invariants | not started |
 | M7 Sweeps | not started |

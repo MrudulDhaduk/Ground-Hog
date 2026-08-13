@@ -113,8 +113,23 @@ class FaultProfile:
     hang_percent: int = 30
 
     @classmethod
+    def perfect(cls) -> "FaultProfile":
+        """Nothing goes wrong, and latency is *constant*.
+
+        Not the same as `quiet`. A fixed delay makes the network FIFO, which quietly
+        removes reordering -- the one fault that needs no failure at all to happen. It
+        is worth having a profile where even that is switched off, if only to have
+        something to compare `quiet` against.
+        """
+        return cls(name="perfect", network=NetworkFaults(latency=(5 * MILLISECOND,) * 2))
+
+    @classmethod
     def quiet(cls) -> "FaultProfile":
-        """A network that only takes time. Everything else behaves."""
+        """A network that only takes time -- a varying amount of it.
+
+        No drops, no partitions, no crashes, no disk faults. The only thing that ever
+        happens is that one message takes longer than another.
+        """
         return cls()
 
     @classmethod
@@ -133,9 +148,17 @@ class FaultProfile:
 
 
 PROFILES: Final[Mapping[str, FaultProfile]] = {
+    "perfect": FaultProfile.perfect(),
     "quiet": FaultProfile.quiet(),
     "aggressive": FaultProfile.aggressive(),
 }
+
+
+def profile_by_name(name: str) -> FaultProfile:
+    try:
+        return PROFILES[name]
+    except KeyError:
+        raise ValueError(f"unknown fault profile: {name!r}") from None
 
 
 def _split(rng: Rng, node_ids: Sequence[NodeId]) -> tuple[tuple[NodeId, ...], tuple[NodeId, ...]]:
