@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "groundhog"
+description = "A Raft KV store and the deterministic simulation harness that tortures it."
+requires-python = ">=3.11"
+authors = [{ name = "Dhaduk Mrudul", email = "dhadukmrudul@gmail.com" }]
+dynamic = ["version"]
+
+# Deliberately empty, and it stays that way. Every runtime dependency is a new
+# source of non-determinism we do not control. Rule: stdlib only in groundhog/.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+groundhog = "groundhog.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "groundhog.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["groundhog*"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # import sorting
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "C4",  # comprehensions
+    "SIM", # simplify
+    "PTH", # use pathlib
+    "RUF", # ruff-specific
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["groundhog", "tests"]
+warn_unreachable = true
