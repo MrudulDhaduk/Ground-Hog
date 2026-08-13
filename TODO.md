@@ -134,18 +134,18 @@ valid log that is a prefix of what was `sync()`ed.
 
 ## M3 — The fake network
 
-- [ ] `[C]` `network.py` — `Network` Protocol: `send(to, msg)`
-- [ ] `[C]` `sim/net.py` — `SimNetwork`, schedules delivery as a future event
-- [ ] `[C]` `sim/faults.py` — the full menu from spec §3:
-  - [ ] drop (probability)
-  - [ ] delay (random within a range)
-  - [ ] duplicate
-  - [ ] reorder (falls out of independent random delays — assert it actually happens)
-  - [ ] **partition**: a symmetric or one-way split for a duration
-  - [ ] node crash / restart (wipes volatile state, keeps synced disk)
-  - [ ] node hang (stops processing but stays "up")
-- [ ] `[C]` Fault schedule is generated from the rng up front and printed in the trace header
-- [ ] `[C]` `tests/test_faults.py` — each fault kind provably fires under some seed
+- [x] `[C]` `network.py` — `Network` Protocol: `send(to, msg)`
+- [x] `[C]` `sim/net.py` — `SimNetwork`, schedules delivery as a future event
+- [x] `[C]` `sim/faults.py` — the full menu from spec §3:
+  - [x] drop (probability)
+  - [x] delay (random within a range)
+  - [x] duplicate
+  - [x] reorder (falls out of independent random delays — assert it actually happens)
+  - [x] **partition**: a symmetric or one-way split for a duration
+  - [x] node crash / restart (wipes volatile state, keeps synced disk)
+  - [x] node hang (stops processing but stays "up")
+- [x] `[C]` Fault schedule is generated from the rng up front and printed in the trace header
+- [x] `[C]` `tests/test_faults.py` — each fault kind provably fires under some seed
 
 **Done when:** `--seed N --faults aggressive` shows drops, partitions and crashes in the
 trace, and re-running seed N reproduces the identical fault sequence.
@@ -293,7 +293,7 @@ etcd, `asyncio` anywhere, Docker, any cloud. Spec §4. If a plan calls for these
 | M0 Skeleton | **done** |
 | M1 Deterministic core | **done** |
 | M2 Storage + recovery | **done** |
-| M3 Fake network | not started |
+| M3 Fake network | **done** |
 | M4 Break replication | not started |
 | M5 Raft | not started |
 | M6 Invariants | not started |

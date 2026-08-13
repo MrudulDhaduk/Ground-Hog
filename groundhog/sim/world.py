@@ -57,7 +57,10 @@ class Simulator(Generic[NodeT]):
         self.clock = SimClock(self.queue)
         self.trace: Trace = trace if trace is not None else NullTrace()
         self.nodes: dict[NodeId, NodeT] = {}
-        self._header = dict(header) if header is not None else {}
+        #: Extra fields for the `sim.start` record. Mutable until `run()` is called,
+        #: because some of what belongs in a header -- M3's fault schedule -- has to be
+        #: drawn from `self.rng`, which does not exist until this object does.
+        self.header: dict[str, JsonValue] = dict(header) if header is not None else {}
         self._events = 0
 
     def register(self, node_id: NodeId, node: NodeT) -> None:
@@ -77,7 +80,7 @@ class Simulator(Generic[NodeT]):
             "max_ticks": max_ticks,
             "nodes": self.node_ids(),
         }
-        start.update(self._header)
+        start.update(self.header)
         self.trace.write(start)
 
         stop_reason = STOP_IDLE

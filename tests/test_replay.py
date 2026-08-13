@@ -153,30 +153,24 @@ def test_the_result_summary_is_reproducible() -> None:
     assert first.events > 60
 
 
-def test_node_counters_are_reproducible() -> None:
-    def counters() -> list[tuple[int, int, int, int]]:
-        sim, _ = run_demo(SEED, trace=ListTrace(), max_ticks=MAX_TICKS)
+def test_node_state_is_reproducible() -> None:
+    def counters() -> list[tuple[int, int, int]]:
+        cluster, _ = run_demo(SEED, trace=ListTrace(), max_ticks=MAX_TICKS)
         return [
-            (node.node_id, node.sent, node.received, node.dropped)
-            for node in (sim.nodes[i] for i in sim.node_ids())
+            (
+                node_id,
+                cluster.sim.nodes[node_id].pongs,
+                len(cluster.sim.nodes[node_id].storage.image()),
+            )
+            for node_id in cluster.sim.node_ids()
         ]
 
     assert counters() == counters()
-
-
-def test_messages_actually_get_dropped_somewhere() -> None:
-    """Fault injection that never fires is not fault injection."""
-    dropped = 0
-    for seed in range(20):
-        trace = ListTrace()
-        run_demo(seed, trace=trace, max_ticks=MAX_TICKS)
-        dropped += sum(1 for record in trace.records if record["kind"] == "drop")
-    assert dropped > 0
 
 
 def test_the_demo_exercises_every_piece_of_the_core() -> None:
     trace = ListTrace()
     run_demo(SEED, trace=trace, max_ticks=MAX_TICKS)
     kinds = dict.fromkeys(str(record["kind"]) for record in trace.records)
-    for expected in ("sim.start", "ping_timer", "send", "deliver:ping", "reply", "sim.end"):
+    for expected in ("sim.start", "ping_timer", "net.deliver", "sim.end"):
         assert expected in kinds, f"{expected} never happened; kinds seen: {sorted(kinds)}"
