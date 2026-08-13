@@ -116,16 +116,16 @@ milestone is worthless without it.
 
 ## M2 — Storage, WAL, crash recovery *(spec rung 2)*
 
-- [ ] `[C]` `storage.py` — `Storage` Protocol: `append(entries)`, `sync()`, `read_all()`, `truncate_from(index)`
-- [ ] `[C]` `codec.py` — length-prefixed records: `[u32 len][u32 crc32][payload]`
-- [ ] `[C]` `FileStorage` — the real one, `os.fsync` on `sync()`
-- [ ] `[C]` `sim/disk.py` — `SimStorage` with the full fault menu:
-  - [ ] data written but not `sync()`ed is **lost on crash** (the important one)
-  - [ ] torn write: last record truncated mid-payload
-  - [ ] write fails with an error
-  - [ ] `sync()` is slow (costs virtual ticks)
-- [ ] `[C]` Recovery: scan the WAL on restart, discard the trailing record if its CRC fails
-- [ ] `[C]` Tests: crash at every byte offset of a write; recovery must always yield a valid prefix
+- [x] `[C]` `storage.py` — `Storage` Protocol: `append(entries)`, `sync()`, `read_all()`, `truncate_from(index)`
+- [x] `[C]` `codec.py` — length-prefixed records: `[u32 len][u32 crc32][payload]`
+- [x] `[C]` `FileStorage` — the real one, `os.fsync` on `sync()`
+- [x] `[C]` `sim/disk.py` — `SimStorage` with the full fault menu:
+  - [x] data written but not `sync()`ed is **lost on crash** (the important one)
+  - [x] torn write: last record truncated mid-payload
+  - [x] write fails with an error
+  - [x] `sync()` is slow (costs virtual ticks — billed via `take_owed_ticks()`)
+- [x] `[C]` Recovery: scan the WAL on restart, discard the trailing record if its CRC fails
+- [x] `[C]` Tests: crash at every byte offset of a write; recovery must always yield a valid prefix
 
 **Done when:** crashing mid-`append` at any offset, then restarting, always produces a
 valid log that is a prefix of what was `sync()`ed.
@@ -292,7 +292,7 @@ etcd, `asyncio` anywhere, Docker, any cloud. Spec §4. If a plan calls for these
 |---|---|
 | M0 Skeleton | **done** |
 | M1 Deterministic core | **done** |
-| M2 Storage + recovery | not started |
+| M2 Storage + recovery | **done** |
 | M3 Fake network | not started |
 | M4 Break replication | not started |
 | M5 Raft | not started |
