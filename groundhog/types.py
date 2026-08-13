@@ -13,6 +13,7 @@ These are plain aliases, not `typing.NewType`. That is a deliberate call:
 So: these names are documentation for the reader, not a proof for the compiler.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Final, TypeAlias
 
 #: Identity of a node in the cluster. Never arithmetic, only compared and ordered.
@@ -33,3 +34,14 @@ Tick: TypeAlias = int
 MICROSECOND: Final[Tick] = 1
 MILLISECOND: Final[Tick] = 1_000 * MICROSECOND
 SECOND: Final[Tick] = 1_000 * MILLISECOND
+
+#: Anything that may appear in a trace record.
+#:
+#: `float` is deliberately absent. A float in a trace is a determinism smell -- it
+#: means a quantity somewhere is not an integer, and repr rounding is exactly the kind
+#: of thing that makes two "identical" runs differ in the last decimal place.
+#:
+#: `Sequence`/`Mapping` rather than `list`/`dict` because both are covariant, so a
+#: `list[NodeId]` is accepted where a `JsonValue` is wanted. `list` is invariant and
+#: would not be. (At runtime `json` still only serialises list, tuple and dict.)
+JsonValue: TypeAlias = str | int | bool | Sequence["JsonValue"] | Mapping[str, "JsonValue"] | None

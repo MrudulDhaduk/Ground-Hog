@@ -98,15 +98,15 @@ These are the rules that make `seed in → run out` actually hold.
 
 The heart. Everything else hangs off this.
 
-- [ ] `[C]` `sim/rng.py` — `Rng`: `below(n)`, `chance(pct)`, `pick(seq)`, `between(a,b)`.
+- [x] `[C]` `sim/rng.py` — `Rng`: `below(n)`, `chance(pct)`, `pick(seq)`, `between(a,b)`.
       Tracks a call counter for trace output.
-- [ ] `[C]` `sim/event.py` — `Event`, `EventQueue` on `heapq` with `(tick, seq)` ordering
-- [ ] `[C]` `clock.py` — `Clock` Protocol; `SimClock` (advances only when the queue pops);
+- [x] `[C]` `sim/event.py` — `Event`, `EventQueue` on `heapq` with `(tick, seq)` ordering
+- [x] `[C]` `clock.py` — `Clock` Protocol; `SimClock` (advances only when the queue pops);
       timer registration + cancellation
-- [ ] `[C]` `sim/world.py` — `Simulator`: owns rng, clock, queue, node registry; `run(max_ticks)`
-- [ ] `[C]` `sim/trace.py` — JSONL event trace, one line per event, replayable and diffable
-- [ ] `[C]` Demo: two toy nodes ping-ponging with random delays
-- [ ] `[C]` `tests/test_replay.py` — **run seed 4471 twice, assert the two traces are byte-identical**
+- [x] `[C]` `sim/world.py` — `Simulator`: owns rng, clock, queue, node registry; `run(max_ticks)`
+- [x] `[C]` `sim/trace.py` — JSONL event trace, one line per event, replayable and diffable
+- [x] `[C]` Demo: two toy nodes ping-ponging with random delays (`groundhog demo`)
+- [x] `[C]` `tests/test_replay.py` — **run seed 4471 twice, assert the two traces are byte-identical**
 
 **Done when:** the same seed produces a byte-identical trace file across two runs, two
 processes, and a reboot. If this is ever false, stop everything and fix it — every later
@@ -291,7 +291,7 @@ etcd, `asyncio` anywhere, Docker, any cloud. Spec §4. If a plan calls for these
 | Milestone | Status |
 |---|---|
 | M0 Skeleton | **done** |
-| M1 Deterministic core | not started |
+| M1 Deterministic core | **done** |
 | M2 Storage + recovery | not started |
 | M3 Fake network | not started |
 | M4 Break replication | not started |

@@ -50,6 +50,9 @@ BANNED_CALLS: Final[dict[str, str]] = {
 ALLOWLIST: Final[dict[str, frozenset[str]]] = {
     # The PYTHONHASHSEED guard restarts the interpreter before any simulation exists.
     "groundhog/__main__.py": frozenset({"subprocess"}),
+    # The one place `random` is allowed: it wraps a single seeded Random and every
+    # other module draws from that. This is rule 1's single point of entry.
+    "groundhog/sim/rng.py": frozenset({"random"}),
 }
 
 
