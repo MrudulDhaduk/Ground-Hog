@@ -178,14 +178,16 @@ and explain in one sentence why Raft would not have.
 The split from spec §5 applies here and nowhere else more strongly.
 
 ### Scaffolding
-- [ ] `[C]` `messages.py` — `RequestVote`, `RequestVoteReply`, `AppendEntries`,
+- [x] `[C]` `messages.py` — `RequestVote`, `RequestVoteReply`, `AppendEntries`,
       `AppendEntriesReply`, `ClientRequest`, `ClientReply` as frozen dataclasses
-- [ ] `[C]` `log.py` — `LogEntry(term, index, command)`, `RaftLog` with
+- [x] `[C]` `log.py` — `LogEntry(term, index, command)`, `RaftLog` with
       `last_index()`, `term_at(i)`, `slice_from(i)`, `truncate_from(i)`, `append(...)`
-- [ ] `[C]` `raft/node.py` skeleton — role enum, persistent vs volatile state fields,
+- [x] `[C]` `raft/node.py` skeleton — role enum, persistent vs volatile state fields,
       the message dispatch switch, timer wiring, persistence calls
-- [ ] `[C]` `raft/figure2.md` — Figure 2 of the paper transcribed as a checklist, each
+- [x] `[C]` `raft/figure2.md` — Figure 2 of the paper transcribed as a checklist, each
       rule tagged with the function that must enforce it
+- [x] `[C]` `raft/persist.py` — hard state + entries in one WAL, recovery by replay
+- [x] `[C]` `raft/world.py` — 3-node cluster, networked client; `groundhog raft --seed N`
 
 ### The core — `[Y]`, by hand, from the paper
 - [ ] `[C→Y]` `on_request_vote()` — including the **election restriction**
@@ -297,7 +299,7 @@ etcd, `asyncio` anywhere, Docker, any cloud. Spec §4. If a plan calls for these
 | M2 Storage + recovery | **done** |
 | M3 Fake network | **done** |
 | M4 Break replication | `[C]` done — **`[Y]` is yours** |
-| M5 Raft | not started |
+| M5 Raft | scaffolding done — **the six functions are yours** |
 | M6 Invariants | not started |
 | M7 Sweeps | not started |
 | M8 Debug tooling | not started |

@@ -10,6 +10,8 @@ from collections.abc import Callable, Sequence
 from groundhog import __version__
 from groundhog.naive.replicator import IMPLEMENTED as REPLICATOR_IMPLEMENTED
 from groundhog.naive.world import DEFAULT_KEYS, DEFAULT_WRITES, run_naive
+from groundhog.raft.node import IMPLEMENTED as RAFT_IMPLEMENTED
+from groundhog.raft.world import run_raft
 from groundhog.sim.demo import DEFAULT_NODES, run_demo
 from groundhog.sim.faults import PROFILES, profile_by_name
 from groundhog.sim.trace import NullTrace, open_trace
@@ -90,6 +92,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="write a JSONL trace here; '-' for stdout",
     )
     naive.set_defaults(handler=_cmd_naive)
+
+    raft = subcommands.add_parser(
+        "raft",
+        help="run a 3-node Raft cluster under the simulator",
+        description="Elect a leader, replicate writes, survive the leader dying.",
+    )
+    raft.add_argument("--seed", type=int, default=DEFAULT_SEED, help="the universe to run")
+    raft.add_argument(
+        "--faults",
+        choices=sorted(PROFILES),
+        default="quiet",
+        help="how badly the world behaves (default: quiet)",
+    )
+    raft.add_argument("--writes", type=int, default=20, help="client writes to issue")
+    raft.add_argument(
+        "--trace",
+        metavar="PATH",
+        default=None,
+        help="write a JSONL trace here; '-' for stdout",
+    )
+    raft.set_defaults(handler=_cmd_raft)
 
     return parser
 
@@ -179,6 +202,31 @@ def _scan_seeds(args: argparse.Namespace, profile_name: str) -> int:
 
     print(f"\n{broken} of {checked} seeds broke under '{profile_name}'")
     return 1 if broken else 0
+
+
+def _cmd_raft(args: argparse.Namespace) -> int:
+    if not RAFT_IMPLEMENTED:
+        print(
+            "raft/node.py is not finished yet.\n"
+            "The six consensus functions are yours (M5 [C->Y]). Read raft/figure2.md\n"
+            "beside the paper, fill them in, then set IMPLEMENTED = True."
+        )
+        return 2
+
+    with open_trace(args.trace) as trace:
+        result = run_raft(
+            args.seed,
+            trace=trace,
+            profile=profile_by_name(args.faults),
+            writes=args.writes,
+        )
+
+    print(result.summary())
+    if not result.quiescent:
+        print("  WARNING: the run did not settle")
+    for node_id in sorted(result.stores):
+        print(f"  node {node_id}  commit {result.committed[node_id]}  {result.stores[node_id]}")
+    return 0 if result.acked == result.requested else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
