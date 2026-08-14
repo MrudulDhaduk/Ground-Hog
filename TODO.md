@@ -158,15 +158,14 @@ trace, and re-running seed N reproduces the identical fault sequence.
 > vocabulary."
 
 - [x] `[C]` `kv.py` — the state machine: `put/get/delete` applied from a committed log
-- [ ] `[Y]` `naive/replicator.py` — **you write this.** One primary, two backups,
-      fire-and-forget replication, ack the client immediately. No terms, no elections,
-      no quorum. *(stub + contract + failing tests are in place; set `IMPLEMENTED = True`
-      when done)*
+- [x] `[Y→C]` `naive/replicator.py` — one primary, two backups, fire-and-forget
+      replication, ack the client immediately. No terms, no elections, no quorum.
+      *(written by Claude at the user's direction, per spec §5)*
 - [x] `[C]` `invariants/divergence.py` — a checker that just compares the three KV maps
-- [ ] `[Y]` Point the simulator at it and find seeds where the three copies disagree
-      — `groundhog naive --scan 0:2000 --faults quiet`
-- [ ] `[Y]` **Write down, in `notes/rung3.md`, the three concrete ways you broke it**
-      and which Raft rule fixes each one
+- [x] `[Y→C]` Seeds where the three copies disagree: 29/500 under `quiet`,
+      488/500 under `aggressive`, 0/500 under `perfect`
+- [x] `[Y→C]` `notes/rung3.md` — three failures, three seeds, three Raft rules.
+      **Worth rewriting in your own words; it is the interview material.**
 
 **Done when:** you can name a seed that silently loses an acknowledged write, replay it,
 and explain in one sentence why Raft would not have.
@@ -189,18 +188,23 @@ The split from spec §5 applies here and nowhere else more strongly.
 - [x] `[C]` `raft/persist.py` — hard state + entries in one WAL, recovery by replay
 - [x] `[C]` `raft/world.py` — 3-node cluster, networked client; `groundhog raft --seed N`
 
-### The core — `[Y]`, by hand, from the paper
-- [ ] `[C→Y]` `on_request_vote()` — including the **election restriction**
+### The core — written by Claude at the user's direction (spec §5's "useful trick")
+- [x] `on_request_vote()` — including the **election restriction**
       (§5.4.1: reject if the candidate's log is not at least as up-to-date)
-- [ ] `[C→Y]` `on_request_vote_reply()` — vote counting, term stepping-down
-- [ ] `[C→Y]` `on_append_entries()` — the consistency check, conflict truncation,
+- [x] `on_request_vote_reply()` — vote counting, term stepping-down
+- [x] `on_append_entries()` — the consistency check, conflict truncation,
       `commitIndex` advance on the follower
-- [ ] `[C→Y]` `on_append_entries_reply()` — `nextIndex`/`matchIndex`, backtracking on failure
-- [ ] `[C→Y]` `advance_commit_index()` — majority `matchIndex`, **and the rule that a
+- [x] `on_append_entries_reply()` — `nextIndex`/`matchIndex`, backtracking on failure
+- [x] `advance_commit_index()` — majority `matchIndex`, **and the rule that a
       leader may only commit an entry from its own current term** (§5.4.2)
-- [ ] `[C→Y]` `on_election_timeout()` — term increment, self-vote, randomized timeout
-- [ ] `[C→Y]` Persistence ordering: `currentTerm`, `votedFor` and the log must be
-      `sync()`ed **before** any reply that depends on them leaves the node
+- [x] `on_election_timeout()` — term increment, self-vote, randomized timeout
+- [x] `on_client_request()` — reply only after the entry is committed and applied
+- [x] Persistence ordering: `currentTerm`, `votedFor` and the log are `sync()`ed
+      **before** any reply that depends on them leaves the node
+
+> **The `[Y]` work is now finding what is wrong with it**, not writing it. It passes 370
+> tests; M6 measured that this proves very little. `groundhog raft --scan 0:2000
+> --faults aggressive` is where the actual learning moved to.
 
 **Done when:** a 3-node cluster elects a leader, replicates writes, survives leader
 crash, and recovers — under a clean network first, then under faults.
@@ -301,8 +305,8 @@ etcd, `asyncio` anywhere, Docker, any cloud. Spec §4. If a plan calls for these
 | M1 Deterministic core | **done** |
 | M2 Storage + recovery | **done** |
 | M3 Fake network | **done** |
-| M4 Break replication | `[C]` done — **`[Y]` is yours** |
-| M5 Raft | scaffolding done — **the six functions are yours** |
+| M4 Break replication | **done** — 3 failures in `notes/rung3.md` |
+| M5 Raft | **done** — written by Claude, unverified beyond the test suite |
 | M6 Invariants | **done** (verified against a reference Raft) |
 | M7 Sweeps | not started |
 | M8 Debug tooling | not started |

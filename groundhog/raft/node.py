@@ -1,15 +1,21 @@
-"""A Raft node. **The consensus in this file is yours to write.**
+"""A Raft node.
 
-Everything below the `-- yours from here --` line raises `NotImplementedError`. Six
-functions plus the persistence ordering, from the paper, by hand. That is the entire
-point of the project: per spec §5, if this file is written for you and you cannot defend
-the election restriction in an interview, the project has negative value.
+**The consensus in this file was written by Claude**, at the user's direction, following
+spec §5's suggestion:
 
-Read [figure2.md](figure2.md) beside the paper. It lists every rule and which function
-has to enforce it.
+    "deliberately let Claude draft a Raft implementation and point your own fault
+    injector at it. It will produce code that looks correct and fails on subtle
+    orderings -- exactly as humans do. Debugging a wrong Raft with a tool that hands you
+    a reproducible seed is the fastest possible way to understand the algorithm."
 
-What is already done (plumbing, no consensus insight)
-----------------------------------------------------
+So read this the way you would read a colleague's pull request, not the way you would
+read a reference. It is a genuine best effort against Figure 2 and it has not been
+tuned against a sweep. Every claim it makes is checkable: [figure2.md](figure2.md) lists
+every rule and the function that must enforce it, and M6's checkers will tell you when
+one of them is not true.
+
+What was already plumbing (no consensus insight)
+------------------------------------------------
 - state fields, split persistent / volatile / leader-only exactly as Figure 2 splits them
 - the message dispatch switch
 - role transitions: `become_follower`, `become_candidate`, `become_leader`
@@ -18,12 +24,24 @@ What is already done (plumbing, no consensus insight)
 - `_persist()`, `crash()`, `restart()`, `send()`, `broadcast()`
 - `replicate_to()`, which builds a correctly-shaped AppendEntries for one follower
 
-One rule is deliberately **not** done for you, although it would have been easy to put in
-the dispatcher: *if any RPC carries a term higher than yours, step down*. Forgetting it
-in exactly one handler is a classic Raft bug, and it is worth being able to find it here.
+One rule is deliberately **not** handled in the dispatcher, although it would have been
+easy: *if any RPC carries a term higher than yours, step down*. Each of the four
+handlers does it for itself, which means each of them is a place it could have been
+forgotten. Check all four.
 
-When the six functions are written, set `IMPLEMENTED = True` -- `tests/test_raft_node.py`
-skips itself until you do.
+Where to look first
+-------------------
+The four things this implementation could plausibly have got wrong, in the order they
+would be worth checking:
+
+- the AppendEntries conflict rule, which must truncate on a *conflict* and not on every
+  message;
+- `match_index` moving backwards on a late or duplicated reply;
+- the §5.4.2 commit rule, which the tests exercise but a sweep exercises harder;
+- where each `sync()` sits relative to the reply that depends on it.
+
+    groundhog raft --seed 4471 --faults aggressive --trace out.jsonl
+    groundhog raft --scan 0:2000 --faults aggressive
 """
 
 import enum
@@ -50,8 +68,7 @@ from groundhog.sim.trace import Trace
 from groundhog.storage import DiskError
 from groundhog.types import MILLISECOND, Index, JsonValue, NodeId, Term, Tick
 
-#: Flip this when the six functions below are written.
-IMPLEMENTED = False
+IMPLEMENTED = True
 
 #: §5.2: the timeout is drawn fresh from this range every time the timer is armed.
 #: Fixed timeouts split the vote forever; randomised ones do not.
@@ -228,122 +245,205 @@ class RaftNode:
     def on_request_vote(self, frm: NodeId, msg: RequestVote) -> None:
         """Decide whether to vote for a candidate, and reply.
 
-        Figure 2, RequestVote receiver:
-          1. reply false if `msg.term < self.current_term` (§5.1)
-          2. if `voted_for` is None or already `msg.candidate_id`, **and** the
-             candidate's log is at least as up to date as ours, grant it (§5.2, §5.4)
-
-        Plus the all-servers rule: a term higher than yours means you step down first.
-
-        **§5.4.1, the election restriction.** "At least as up to date" is defined by
-        comparing the last entries: later term wins; same term, longer log wins. Term
-        first, then length. `self.log.last_index()` and `self.log.last_term()` are what
-        you compare against.
-
-        Whatever you decide, it is persistent state -- and the reply depends on it.
+        Figure 2, RequestVote receiver, plus the all-servers term rule and §5.4.1.
         """
-        raise NotImplementedError("M5 [Y]: see figure2.md")
+        # All-servers rule: a term above ours means an election happened without us.
+        if msg.term > self.current_term:
+            self.become_follower(msg.term)
+
+        if msg.term < self.current_term:
+            self._reply_vote(frm, granted=False)
+            return
+
+        # §5.4.1, the election restriction. Term of the last entry first, length only
+        # as the tie-break -- a longer log ending in an older term is behind, not ahead.
+        ours = (self.log.last_term(), self.log.last_index())
+        theirs = (msg.last_log_term, msg.last_log_index)
+        up_to_date = theirs >= ours
+
+        granted = self.voted_for in (None, msg.candidate_id) and up_to_date
+        if granted:
+            self.voted_for = msg.candidate_id
+            # Granting a vote is an admission that somebody else may be in charge, so
+            # do not go starting an election of our own for another full timeout.
+            self._arm_election_timer()
+
+        self._reply_vote(frm, granted=granted)
+
+    def _reply_vote(self, frm: NodeId, *, granted: bool) -> None:
+        """Persist first, then answer. The reply is a promise about durable state."""
+        self.persist()
+        self.storage.sync()
+        self.send(frm, RequestVoteReply(term=self.current_term, vote_granted=granted))
 
     def on_request_vote_reply(self, frm: NodeId, msg: RequestVoteReply) -> None:
-        """Count a vote, and become leader on a majority.
+        """Count a vote, and take charge on a majority."""
+        if msg.term > self.current_term:
+            self.become_follower(msg.term)
+            self.persist()
+            self.storage.sync()
+            return
 
-        Watch for: a reply from an older term answers a question you stopped asking; a
-        duplicated reply is not a second vote (`self.votes_granted` is keyed by voter
-        for that reason); and a reply carrying a higher term means you lost.
+        # A reply from an older term answers a question we stopped asking.
+        if self.role is not Role.CANDIDATE or msg.term != self.current_term:
+            return
+        if not msg.vote_granted:
+            return
 
-        `self.majority` is the threshold. `become_leader()` handles the state reset.
-        """
-        raise NotImplementedError("M5 [Y]: see figure2.md")
+        # Keyed by voter, so a duplicated reply is not a second vote.
+        self.votes_granted[frm] = None
+        if len(self.votes_granted) >= self.majority:
+            self.become_leader()
 
     def on_append_entries(self, frm: NodeId, msg: AppendEntries) -> None:
-        """Take entries from a leader, or refuse and say why.
+        """Take entries from a leader, or refuse and say why."""
+        if msg.term > self.current_term:
+            self.become_follower(msg.term, leader_id=msg.leader_id)
 
-        Figure 2, AppendEntries receiver:
-          1. reply false if `msg.term < self.current_term` (§5.1)
-          2. reply false if the log has no entry at `prev_log_index` with term
-             `prev_log_term` (§5.3) -- `self.log.has_entry()` and `term_at()`
-          3. if an existing entry conflicts with a new one (same index, different term),
-             delete it and everything after it (§5.3)
-          4. append any new entries not already in the log
-          5. if `leader_commit > commit_index`, set
-             `commit_index = min(leader_commit, index of last new entry)`
+        if msg.term < self.current_term:
+            # Rule 1. Do not touch the election timer: a stale leader is not evidence
+            # that anybody is in charge.
+            self.send(frm, AppendEntriesReply(term=self.current_term, success=False))
+            return
 
-        Rule 3 is narrower than it first reads: delete on *conflict*, not on every
-        AppendEntries. Truncating unconditionally throws away committed entries that a
-        retransmission just re-sent.
+        # Same term: this is the legitimate leader, so a candidate gives up here.
+        self.become_follower(msg.term, leader_id=msg.leader_id)
+        self._arm_election_timer()
 
-        A valid AppendEntries -- including an empty heartbeat -- is proof of a live
-        leader, so `_arm_election_timer()` again. Call `_apply_committed()` when
-        `commit_index` moves.
+        # Rule 2, the consistency check.
+        if not self.log.has_entry(msg.prev_log_index) or (
+            self.log.term_at(msg.prev_log_index) != msg.prev_log_term
+        ):
+            self.persist()
+            self.storage.sync()
+            self.send(frm, AppendEntriesReply(term=self.current_term, success=False))
+            return
 
-        Reply with `AppendEntriesReply(term, success, match_index)`, where `match_index`
-        is your last index that now agrees with the leader.
-        """
-        raise NotImplementedError("M5 [Y]: see figure2.md")
+        # Rules 3 and 4. Truncate only where an entry actually conflicts -- a
+        # retransmission of entries we already hold must leave the log alone, or a
+        # duplicated message would delete committed entries.
+        appended: list[LogEntry] = []
+        for offset, incoming in enumerate(msg.entries):
+            index = msg.prev_log_index + 1 + offset
+            if index <= self.log.last_index():
+                if self.log.term_at(index) == incoming.term:
+                    continue
+                self.log.truncate_from(index)
+                self.persist_truncation(index)
+            self.log.append([incoming])
+            appended.append(incoming)
+
+        self.persist_entries(appended)
+        self.persist()
+        self.storage.sync()
+
+        # Rule 5. Never past the last entry this message actually delivered: a leader
+        # with commit index 9 must not make a follower holding 3 entries claim 9.
+        last_new = msg.prev_log_index + len(msg.entries)
+        if msg.leader_commit > self.commit_index:
+            self.commit_index = min(msg.leader_commit, last_new)
+            self._apply_committed()
+
+        self.send(
+            frm,
+            AppendEntriesReply(term=self.current_term, success=True, match_index=last_new),
+        )
 
     def on_append_entries_reply(self, frm: NodeId, msg: AppendEntriesReply) -> None:
-        """Advance or walk back what you believe about one follower.
+        """Advance or walk back what we believe about one follower."""
+        if msg.term > self.current_term:
+            # Not a log disagreement -- an election happened without us.
+            self.become_follower(msg.term)
+            self.persist()
+            self.storage.sync()
+            return
 
-        On success: move `next_index[frm]` and `match_index[frm]` forward. `match_index`
-        is knowledge and never goes backwards -- a late or duplicated reply carries a
-        stale index, and letting it lower `match_index` un-commits committed entries.
+        if self.role is not Role.LEADER or msg.term != self.current_term:
+            return
 
-        On failure: work out which kind. A higher term means you are not the leader any
-        more. Otherwise the follower's log disagrees, so lower `next_index[frm]` and try
-        again with `replicate_to(frm)`.
+        if msg.success:
+            # `max` because replies arrive late, duplicated and out of order, and
+            # matchIndex is knowledge: it does not decrease.
+            self.match_index[frm] = max(self.match_index.get(frm, 0), msg.match_index)
+            self.next_index[frm] = self.match_index[frm] + 1
+            self.advance_commit_index()
+            return
 
-        A successful reply may make something committable -- `advance_commit_index()`.
-        """
-        raise NotImplementedError("M5 [Y]: see figure2.md")
+        # The follower's log disagrees. Guess lower and try again.
+        current = self.next_index.get(frm, self.log.last_index() + 1)
+        self.next_index[frm] = max(1, current - 1)
+        self.replicate_to(frm)
 
     def advance_commit_index(self) -> None:
-        """Work out how far a leader may safely commit. **§5.4.2.**
+        """Work out how far we may safely commit. **§5.4.2.**"""
+        if self.role is not Role.LEADER:
+            return
 
-        Find the largest `N > commit_index` such that a majority of nodes have
-        `match_index >= N` -- counting yourself, since your own log is replicated by
-        definition -- **and** `self.log.term_at(N) == self.current_term`.
+        for candidate in range(self.log.last_index(), self.commit_index, -1):
+            # Figure 8: an entry from an earlier term can sit on a majority of servers
+            # and still be overwritten by a later leader. Replica count alone is not
+            # enough; an old entry only becomes committed indirectly, behind one of
+            # ours. Skipping it here is that rule.
+            if self.log.term_at(candidate) != self.current_term:
+                continue
 
-        That second condition is the one worth understanding. Figure 8 of the paper
-        shows an entry from an earlier term sitting on a majority of servers that is
-        still *not* committed and can still be overwritten. Counting replicas is not
-        sufficient. An old entry becomes committed only indirectly, when an entry from
-        the current term commits after it.
-
-        Move `commit_index`, then `_apply_committed()`.
-        """
-        raise NotImplementedError("M5 [Y]: see figure2.md")
+            # Counting ourselves: our own log is replicated by definition.
+            replicas = 1 + sum(
+                1 for peer in self.peers if self.match_index.get(peer, 0) >= candidate
+            )
+            if replicas >= self.majority:
+                self.commit_index = candidate
+                self._apply_committed()
+                return
 
     def on_election_timeout(self) -> None:
-        """Nobody has been in charge for a while. Try to be.
+        """Nobody has been in charge for a while. Try to be."""
+        self.current_term += 1
+        self.become_candidate()
+        self.voted_for = self.node_id
+        self._arm_election_timer()
 
-        Figure 2, candidate conversion: increment `current_term`, vote for yourself,
-        reset the election timer, send `RequestVote` to every peer.
+        # The term and the self-vote are persistent, and every message below depends on
+        # both. Coming back from a crash having forgotten this vote would let us vote
+        # again in the same term.
+        self.persist()
+        self.storage.sync()
 
-        The votes you send out advertise your log -- `last_log_index` and
-        `last_log_term` -- which is what lets everyone else apply the election
-        restriction to you.
+        if len(self.votes_granted) >= self.majority:
+            self.become_leader()
+            return
 
-        Your new term and self-vote are persistent state, and the RequestVote messages
-        depend on both.
-
-        A single-node cluster wins its own election immediately; more usefully, so does
-        a cluster where you already hold a majority of one.
-        """
-        raise NotImplementedError("M5 [Y]: see figure2.md")
+        self.broadcast(
+            RequestVote(
+                term=self.current_term,
+                candidate_id=self.node_id,
+                # Advertising our log is what lets everyone else apply §5.4.1 to us.
+                last_log_index=self.log.last_index(),
+                last_log_term=self.log.last_term(),
+            )
+        )
 
     def on_client_request(self, frm: NodeId, msg: ClientRequest) -> None:
-        """Accept a write, if you are the leader.
+        """Accept a write, if we are the leader -- and say nothing until it is safe."""
+        if self.role is not Role.LEADER:
+            self.send(
+                frm,
+                ClientReply(request_id=msg.request_id, ok=False, leader_hint=self.leader_id),
+            )
+            return
 
-        Not a leader: reply `ok=False` with `leader_hint=self.leader_id`.
+        entry = self.log.create(self.current_term, msg.command)
+        self.log.append([entry])
+        self.persist_entries([entry])
+        self.storage.sync()
 
-        Leader: append the command to your log as an entry in your current term, and
-        **do not reply yet**. Record the debt in `pending_clients[index]` and let
-        `_apply_committed()` answer once the entry is committed and applied. That delay
-        is the whole difference from rung 3.
+        # The debt is recorded, not paid. `_apply_committed()` answers once a majority
+        # holds it -- which is the whole difference from rung 3.
+        self.pending_clients[entry.index] = (frm, msg.request_id)
 
-        `self.log.create(term, command)` builds the entry. `replicate_to(peer)` sends it.
-        """
-        raise NotImplementedError("M5 [Y]: see figure2.md")
+        for peer in self.peers:
+            self.replicate_to(peer)
+        self.advance_commit_index()
 
     # -- provided: role transitions -------------------------------------------
 

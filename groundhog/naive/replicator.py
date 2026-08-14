@@ -1,4 +1,8 @@
-"""**You write this file.** Everything below `__init__` is yours.
+"""Rung 3: replication done wrong, on purpose.
+
+Written by Claude at the user's direction, per spec §5's suggestion to let the fault
+injector loose on generated code. The four decisions the assignment asks about are
+recorded at the bottom of this docstring; `notes/rung3.md` has the failures they cause.
 
 The assignment
 ==============
@@ -36,19 +40,27 @@ What each method has to do
     Come back. `self.storage.restart()` first (it discards a torn tail), then rebuild
     `self.kv` from what survived, then set `running` back to `True`.
 
-The decisions you have to make, and must write down
-===================================================
+The four decisions, and which way this file went
+================================================
 
-These are not hints, they are the exercise. Each one is a fork, both directions are
-defensible, and the direction you pick determines which of the three failures you get.
-Record what you chose in `notes/rung3.md`.
+1. **Ack before or after `sync()`?** -- **Before.** "Ack the client immediately" is the
+   assignment, and it is also what a system optimising for latency actually does.
+   Syncing is batched: every `SYNC_EVERY` writes. So there is always a window where the
+   client has been told yes and nothing is durable anywhere.
+2. **Log first or apply first?** -- **Log first.** It costs nothing here, because there
+   is no consistency check to fail and no way to reject a command. It will matter in
+   Raft, where an entry has to be durable before anyone is told it exists.
+3. **Do backups persist?** -- **Yes**, on the same batched-sync path as the primary. A
+   backup that only held things in memory would make every crash a total loss and the
+   divergences would all look the same.
+4. **Does a restarted primary re-send what the backups might have missed?** -- **No.**
+   Fire and forget means forget. There is no `matchIndex`, no retry, no reconciliation.
+   Nothing in this design ever discovers that a backup is behind.
 
-1. **Ack before or after `self.storage.sync()`?** Acking first is faster and is what the
-   assignment says to do. What does a crash cost you?
-2. **Log first, or apply first?** Does it matter here? Will it matter in Raft?
-3. **Do backups persist what they receive, or only hold it in memory?**
-4. **Does a restarted primary re-send anything it has that the backups might not?**
-   (The naive answer is no. Fire and forget means forget.)
+Nothing here is a bug. Every one of these is a defensible engineering choice, and the
+system built out of them loses acknowledged data anyway. That is the rung-3 lesson: the
+failure is not in any single decision, it is in the absence of a rule tying them
+together.
 
 How to find the failures
 ========================
@@ -61,22 +73,24 @@ How to find the failures
 Start with `perfect` and work down. The interesting discovery is how little it takes:
 `quiet` has no drops, no partitions, no crashes and no disk faults. The only thing it
 does is let one message take longer than another.
-
-When you are done, set `IMPLEMENTED = True` below -- `tests/test_naive_replication.py`
-skips itself until you do.
 """
 
 from dataclasses import dataclass
+from typing import Final
 
 from groundhog.clock import Clock
-from groundhog.kv import Command, KvStore
+from groundhog.kv import Command, KvStore, encode_command
 from groundhog.network import Network
 from groundhog.sim.disk import SimStorage
 from groundhog.sim.trace import Trace
+from groundhog.storage import DiskError
 from groundhog.types import JsonValue, NodeId
 
-#: Flip this when you have written the four methods below.
-IMPLEMENTED = False
+IMPLEMENTED = True
+
+#: Writes between `sync()` calls. Group commit, as every real database does it -- and
+#: the reason there is always a window of acknowledged-but-not-durable data.
+SYNC_EVERY: Final = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,28 +126,74 @@ class NaiveReplicator:
 
         self.kv = KvStore()
         self.running = True
+        self.unsynced = 0
 
     @property
     def is_primary(self) -> bool:
         return self.node_id == self.primary_id
 
-    # -- yours from here ------------------------------------------------------
+    # -- the replication --------------------------------------------------------
 
     def on_client_request(self, command: Command) -> bool:
-        """Serve a write. Return True if the client is told it was saved."""
-        raise NotImplementedError("M4 [Y]: see the module docstring")
+        """Serve a write, and say yes before anyone else has heard of it."""
+        if not self.is_primary or not self.running:
+            return False
+
+        if not self._write(command):
+            return False
+
+        for peer in self.peers:
+            self.net.send(peer, Replicate(command))
+
+        # The client is told the write is safe here: one machine has it, possibly not
+        # even on disk yet, and the backups have been sent a message that may never
+        # arrive. Nothing above this line checked anything.
+        self.record("naive.acked", command=command.describe())
+        return True
 
     def on_message(self, frm: NodeId, msg: Replicate) -> None:
-        """A backup receives a replicated command."""
-        raise NotImplementedError("M4 [Y]: see the module docstring")
+        """A backup applies whatever it is handed. There is nobody to answer."""
+        if not self.running:
+            return
+        self._write(msg.command)
+
+    def _write(self, command: Command) -> bool:
+        """Log it, apply it, and sync every so often. False if the disk killed us."""
+        try:
+            self.storage.append([encode_command(command)])
+        except DiskError as exc:
+            # Fail-stop: no idea how much of that landed, so the only honest move is to
+            # die. Nothing restarts this node, which is itself part of the lesson.
+            self.record("naive.disk_error", error=str(exc))
+            self.crash()
+            return False
+
+        self.kv.apply(command)
+        self.unsynced += 1
+        if self.unsynced >= SYNC_EVERY:
+            self.storage.sync()
+            self.unsynced = 0
+        return True
+
+    # -- lifecycle --------------------------------------------------------------
 
     def crash(self) -> None:
-        """The process died. Keep only what was synced."""
-        raise NotImplementedError("M4 [Y]: see the module docstring")
+        """The process died. Volatile state goes; the synced disk stays."""
+        if not self.running:
+            return
+        self.running = False
+        self.kv = KvStore()
+        self.unsynced = 0
+        self.storage.crash()
+        self.record("naive.crash")
 
     def restart(self) -> None:
-        """Come back from the log."""
-        raise NotImplementedError("M4 [Y]: see the module docstring")
+        """Come back from the log, rebuilding the map from what survived."""
+        self.storage.restart()
+        self.kv = KvStore.replay(self.storage.read_all())
+        self.unsynced = 0
+        self.running = True
+        self.record("naive.restart", recovered=len(self.kv))
 
     # -- plumbing you may use -------------------------------------------------
 
