@@ -11,9 +11,9 @@ from groundhog import __version__
 from groundhog.naive.replicator import IMPLEMENTED as REPLICATOR_IMPLEMENTED
 from groundhog.naive.world import DEFAULT_KEYS, DEFAULT_WRITES, run_naive
 from groundhog.raft.node import IMPLEMENTED as RAFT_IMPLEMENTED
-from groundhog.raft.world import run_raft
+from groundhog.raft.world import MUTATIONS, run_raft
 from groundhog.sim.demo import DEFAULT_NODES, run_demo
-from groundhog.sim.faults import PROFILES, profile_by_name
+from groundhog.sim.faults import PROFILES, FaultProfile, profile_by_name
 from groundhog.sim.trace import NullTrace, open_trace
 from groundhog.types import MILLISECOND
 
@@ -111,6 +111,23 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         default=None,
         help="write a JSONL trace here; '-' for stdout",
+    )
+    raft.add_argument(
+        "--scan",
+        metavar="FROM:TO",
+        default=None,
+        help="run a range of seeds and print the ones that violate an invariant",
+    )
+    raft.add_argument(
+        "--mutate",
+        choices=MUTATIONS,
+        default="none",
+        help="deliberately break a rule, to prove the checkers notice (default: none)",
+    )
+    raft.add_argument(
+        "--no-check",
+        action="store_true",
+        help="run without the invariant checkers",
     )
     raft.set_defaults(handler=_cmd_raft)
 
@@ -213,20 +230,57 @@ def _cmd_raft(args: argparse.Namespace) -> int:
         )
         return 2
 
+    profile = profile_by_name(args.faults)
+    if args.scan is not None:
+        return _scan_raft_seeds(args, profile)
+
     with open_trace(args.trace) as trace:
         result = run_raft(
             args.seed,
             trace=trace,
-            profile=profile_by_name(args.faults),
+            profile=profile,
             writes=args.writes,
+            check=not args.no_check,
+            mutate=args.mutate,
         )
 
     print(result.summary())
-    if not result.quiescent:
+    for violation in result.violations:
+        print(f"  {violation.describe()}")
+        print(f"  replay: {violation.reproduce(faults=args.faults)}")
+    if not result.violations and not result.quiescent:
         print("  WARNING: the run did not settle")
     for node_id in sorted(result.stores):
         print(f"  node {node_id}  commit {result.committed[node_id]}  {result.stores[node_id]}")
-    return 0 if result.acked == result.requested else 1
+    return 1 if result.violations else 0
+
+
+def _scan_raft_seeds(args: argparse.Namespace, profile: FaultProfile) -> int:
+    """A sequential seed scan. M7 replaces this with a parallel sweep and a shrinker."""
+    start, _, stop = args.scan.partition(":")
+    broken = 0
+    checked = 0
+
+    for seed in range(int(start), int(stop)):
+        result = run_raft(
+            seed,
+            trace=NullTrace(),
+            profile=profile,
+            writes=args.writes,
+            check=not args.no_check,
+            mutate=args.mutate,
+        )
+        checked += 1
+        if result.violations:
+            broken += 1
+            violation = result.violations[0]
+            print(violation.describe())
+            print(f"  replay: {violation.reproduce(faults=args.faults)}")
+
+    print(f"\n{broken} of {checked} seeds violated an invariant under '{profile.name}'")
+    if args.mutate != "none":
+        print(f"(mutation active: {args.mutate})")
+    return 1 if broken else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

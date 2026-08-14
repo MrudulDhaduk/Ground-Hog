@@ -12,7 +12,7 @@ Nothing else. Anything that wants to happen later does so by scheduling an event
 means the entire history of a run is a single ordered list, and that list is the trace.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
@@ -61,6 +61,10 @@ class Simulator(Generic[NodeT]):
         #: because some of what belongs in a header -- M3's fault schedule -- has to be
         #: drawn from `self.rng`, which does not exist until this object does.
         self.header: dict[str, JsonValue] = dict(header) if header is not None else {}
+        #: Called after every event, with the tick it happened at. M6's invariant
+        #: checkers hang here -- "after every event" is the whole point of them, since a
+        #: property checked only at the end can be violated and repaired unnoticed.
+        self.after_event: list[Callable[[Tick], None]] = []
         self._events = 0
 
     def register(self, node_id: NodeId, node: NodeT) -> None:
@@ -107,6 +111,8 @@ class Simulator(Generic[NodeT]):
 
             try:
                 event.action()
+                for hook in self.after_event:
+                    hook(event.tick)
             except Exception as exc:
                 self.trace.write(
                     {

@@ -214,15 +214,18 @@ crash, and recovers — under a clean network first, then under faults.
 Each runs after every event. Each must have a test that **deliberately breaks Raft and
 proves the checker fires**. An invariant that has never caught anything is not known to work.
 
-- [ ] `[C]` `invariants/base.py` — checker Protocol, registry, violation report w/ seed + tick
-- [ ] `[C]` **Election safety** — at most one leader per term
-- [ ] `[C]` **Log matching** — same (index, term) ⟹ all preceding entries identical
-- [ ] `[C]` **Leader completeness** — a committed entry is in every future leader's log
-- [ ] `[C]` **State machine safety** — an acked value is never lost or changed
-- [ ] `[C]` Bonus: `commitIndex` never decreases; `lastApplied ≤ commitIndex`
-- [ ] `[C]` `invariants/history.py` — client history log, for the state-machine check
-- [ ] `[C]` `tests/test_invariants_catch_bugs.py` — one mutant per checker
+- [x] `[C]` `invariants/base.py` — checker Protocol, registry, violation report w/ seed + tick
+- [x] `[C]` **Election safety** — at most one leader per term
+- [x] `[C]` **Log matching** — same (index, term) ⟹ all preceding entries identical
+- [x] `[C]` **Leader completeness** — a committed entry is in every future leader's log
+- [x] `[C]` **State machine safety** — an acked value is never lost or changed
+- [x] `[C]` Bonus: `commitIndex` never decreases; `lastApplied ≤ commitIndex`
+- [x] `[C]` Bonus: **leader append-only** — a leader never rewrites its own log
+- [x] `[C]` `invariants/history.py` — client history log, for the state-machine check
+- [x] `[C]` `tests/test_invariants_catch_bugs.py` — one mutant per checker
       (e.g. delete the election restriction → leader completeness must fire)
+- [x] `[C]` `groundhog raft --mutate no-election-restriction --scan A:B` — the done-when,
+      as a command you can run
 
 **Done when:** commenting out the election restriction makes a sweep fail within a few
 thousand seeds, and the reported seed replays the failure on demand.
@@ -300,7 +303,7 @@ etcd, `asyncio` anywhere, Docker, any cloud. Spec §4. If a plan calls for these
 | M3 Fake network | **done** |
 | M4 Break replication | `[C]` done — **`[Y]` is yours** |
 | M5 Raft | scaffolding done — **the six functions are yours** |
-| M6 Invariants | not started |
+| M6 Invariants | **done** (verified against a reference Raft) |
 | M7 Sweeps | not started |
 | M8 Debug tooling | not started |
 | M9 Real world | not started |

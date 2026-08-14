@@ -29,12 +29,15 @@ Two more limitations, stated here rather than found later:
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 
 from groundhog.clock import Clock, Timer
+from groundhog.invariants.base import ClusterView, Invariants, InvariantViolated, Violation
+from groundhog.invariants.history import ClientHistory
+from groundhog.invariants.safety import all_checkers
 from groundhog.kv import Command
-from groundhog.messages import ClientReply, ClientRequest, Message
+from groundhog.messages import ClientReply, ClientRequest, Message, RequestVote
 from groundhog.network import Network
 from groundhog.raft.node import RaftNode, Role
 from groundhog.raft.persist import RaftStorage
@@ -189,6 +192,21 @@ class Client:
         return self.writes * (REQUEST_GAP[1] + CLIENT_RETRY)
 
 
+#: What a `--mutate` option can break, deliberately.
+#:
+#: Mutations are applied to *messages in flight*, never by editing the node's code. Two
+#: reasons that is the right place: `raft/node.py` is hand-written and a mutation switch
+#: buried in it would be one more thing to reason about while writing consensus; and a
+#: message-level mutation is honest about what it removes. Rewriting an incoming
+#: RequestVote to claim a maximally up-to-date log makes every voter's §5.4.1 comparison
+#: pass -- which is exactly, and only, "the election restriction is not there".
+NO_ELECTION_RESTRICTION = "no-election-restriction"
+MUTATIONS: tuple[str, ...] = ("none", NO_ELECTION_RESTRICTION)
+
+#: Bigger than any log this simulation will ever produce.
+_UNBEATABLE = 1 << 40
+
+
 @dataclass(frozen=True, slots=True)
 class RaftResult:
     seed: int
@@ -201,12 +219,18 @@ class RaftResult:
     terms_seen: int
     committed: Mapping[NodeId, Index]
     stores: Mapping[NodeId, Mapping[str, str]]
+    violations: tuple[Violation, ...] = ()
+
+    @property
+    def safe(self) -> bool:
+        return not self.violations
 
     def summary(self) -> str:
+        verdict = "SAFE" if self.safe else f"VIOLATED ({self.violations[0].checker})"
         return (
-            f"seed {self.seed}  faults {self.profile}  "
+            f"seed {self.seed}  faults {self.profile}  {verdict}  "
             f"acked {self.acked}/{self.requested}  attempts {self.attempts}  "
-            f"elections {self.leaders_elected}  max_term {self.terms_seen}"
+            f"max_term {self.terms_seen}"
         )
 
 
@@ -219,10 +243,25 @@ class RaftCluster:
         profile: FaultProfile,
         writes: int = DEFAULT_WRITES,
         keys: int = DEFAULT_KEYS,
+        check: bool = True,
+        stride: int = 1,
+        mutate: str = "none",
     ) -> None:
+        if mutate not in MUTATIONS:
+            raise ValueError(f"unknown mutation: {mutate!r}; try one of {MUTATIONS}")
         self.profile = profile
+        self.mutate = mutate
+        self.history = ClientHistory()
         self.sim: Simulator[SimNode] = Simulator(seed, trace=trace)
         rng = self.sim.rng
+
+        self.invariants = Invariants(
+            all_checkers() if check else [],
+            seed=seed,
+            stride=stride,
+            stop_on_violation=True,
+        )
+        self.sim.after_event.append(self._check)
 
         self.network: SimNetwork[Message] = SimNetwork(
             rng,
@@ -287,10 +326,29 @@ class RaftCluster:
         return partial(self._receive, node_id)
 
     def _receive(self, node_id: NodeId, frm: NodeId, msg: Message) -> None:
-        self.node(node_id).on_message(frm, msg)
+        self.node(node_id).on_message(frm, self._mutated(msg))
+
+    def _mutated(self, msg: Message) -> Message:
+        """Break one rule on the way in, if asked to."""
+        if self.mutate == NO_ELECTION_RESTRICTION and isinstance(msg, RequestVote):
+            return replace(msg, last_log_index=_UNBEATABLE, last_log_term=_UNBEATABLE)
+        return msg
 
     def _deliver_to_client(self, frm: NodeId, msg: Message) -> None:
+        if isinstance(msg, ClientReply) and msg.ok and self.client.inflight is not None:
+            request_id, command = self.client.inflight
+            if msg.request_id == request_id:
+                self.history.record_ack(self.sim.clock.now(), request_id, command, frm)
         self.client.on_message(frm, msg)
+
+    def _check(self, tick: Tick) -> None:
+        self.invariants.observe(
+            ClusterView(
+                tick=tick,
+                nodes={node_id: self.node(node_id) for node_id in NODE_IDS},
+                history=self.history,
+            )
+        )
 
     def _on_self_crash(self, node_id: NodeId) -> None:
         """A node's disk failed and it took itself down. Play the supervisor."""
@@ -327,7 +385,20 @@ class RaftCluster:
 
     def run(self) -> RaftResult:
         self.start()
-        return self._verdict(self.sim.run(self.max_ticks))
+        try:
+            outcome = self.sim.run(self.max_ticks)
+        except InvariantViolated as caught:
+            # Fail fast: the run stops at the tick the property broke, so the trace ends
+            # on the event that did it rather than a thousand events of aftermath.
+            self.sim.trace.write(caught.violation.as_record())
+            outcome = RunResult(
+                seed=self.sim.rng.seed,
+                events=0,
+                final_tick=self.sim.clock.now(),
+                rng_calls=self.sim.rng.calls,
+                stop_reason="violation",
+            )
+        return self._verdict(outcome)
 
     def leader_ids(self) -> list[NodeId]:
         """Everyone who currently thinks it is the leader. More than one is not
@@ -353,6 +424,7 @@ class RaftCluster:
             terms_seen=max(node.current_term for node in nodes),
             committed={node.node_id: node.commit_index for node in nodes},
             stores={node.node_id: node.kv.snapshot() for node in nodes},
+            violations=tuple(self.invariants.violations),
         )
 
         verdict: dict[str, JsonValue] = {
@@ -374,5 +446,17 @@ def run_raft(
     profile: FaultProfile,
     writes: int = DEFAULT_WRITES,
     keys: int = DEFAULT_KEYS,
+    check: bool = True,
+    stride: int = 1,
+    mutate: str = "none",
 ) -> RaftResult:
-    return RaftCluster(seed, trace=trace, profile=profile, writes=writes, keys=keys).run()
+    return RaftCluster(
+        seed,
+        trace=trace,
+        profile=profile,
+        writes=writes,
+        keys=keys,
+        check=check,
+        stride=stride,
+        mutate=mutate,
+    ).run()
